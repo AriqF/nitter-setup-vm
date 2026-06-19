@@ -2,3 +2,5 @@
 nitter/sessions.jsonl
 
 examples
+nitter/tools/venv
+sessions.jsonl

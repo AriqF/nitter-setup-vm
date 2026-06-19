@@ -1,0 +1,117 @@
+# Nitter + Prometheus + Grafana monitoring stack
+#
+# Quick start:
+#   cp .env.example .env
+#   cp nitter/sessions.jsonl.example nitter/sessions.jsonl   # then fill with valid tokens
+#   docker compose --profile nitter --profile monitoring up -d
+#
+# Redis: uses external instance — set redisHost in nitter/nitter.conf
+#
+# Profiles:
+#   nitter      — Nitter
+#   monitoring  — Prometheus, Grafana, Node Exporter, cAdvisor
+
+services:
+  nitter:
+    profiles: [nitter]
+    image: zedeus/nitter:latest
+    container_name: nitter
+    ports:
+      - "127.0.0.1:8080:8080" # use "8080:8080" when exposing directly (no reverse proxy)
+    volumes:
+      - ./nitter/nitter.conf:/src/nitter.conf:ro
+      - ./nitter/sessions.jsonl:/src/sessions.jsonl:ro
+    restart: unless-stopped
+    healthcheck:
+      test: wget -nv --tries=1 --spider http://127.0.0.1:8080/Jack/status/20 || exit 1
+      interval: 30s
+      timeout: 5s
+      retries: 2
+    user: "998:998"
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    networks:
+      - infra
+
+  prometheus:
+    profiles: [monitoring]
+    image: prom/prometheus:latest
+    container_name: prometheus
+    restart: unless-stopped
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=30d
+      - --web.enable-lifecycle
+    ports:
+      - "127.0.0.1:9090:9090"
+    networks:
+      - infra
+
+  grafana:
+    profiles: [monitoring]
+    image: grafana/grafana:latest
+    container_name: grafana
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+    ports:
+      - "3000:3000"
+    depends_on:
+      - prometheus
+    networks:
+      - infra
+
+  node-exporter:
+    profiles: [monitoring]
+    image: prom/node-exporter:latest
+    container_name: node-exporter
+    restart: unless-stopped
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/rootfs:ro
+    command:
+      - --path.procfs=/host/proc
+      - --path.rootfs=/rootfs
+      - --path.sysfs=/host/sys
+      - --collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)
+    ports:
+      - "127.0.0.1:9100:9100"
+    networks:
+      - infra
+
+  cadvisor:
+    profiles: [monitoring]
+    image: gcr.io/cadvisor/cadvisor:latest
+    container_name: cadvisor
+    restart: unless-stopped
+    privileged: true
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:rw
+      - /sys:/sys:ro
+      - /var/lib/docker:/var/lib/docker:ro
+    ports:
+      - "127.0.0.1:8081:8080"
+    networks:
+      - infra
+
+volumes:
+  prometheus_data:
+  grafana_data:
+
+networks:
+  infra:
+    driver: bridge
